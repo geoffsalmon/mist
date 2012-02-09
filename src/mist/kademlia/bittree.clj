@@ -3,23 +3,23 @@
   (:use [clojure.core.match :only [match]]))
 
 (defn leaf [bucket]
-  {:bucket bucket :size (count bucket)})
+  {:type ::leaf :bucket bucket :size (count bucket)})
 
 (defn branch [child-t child-f]
-  {:child-t child-t :child-f child-f :size (+ (:size child-t) (:size child-f))})
+  {:type ::branch :child-t child-t :child-f child-f :size (+ (:size child-t) (:size child-f))})
 
 (defn ^{:private true}
   update-internal [update-fun target-bits self-bits depth gap tree]
   "Note: gap is defined as the total size of all buckets closer to self-bits than target-bits"
   (match [tree]
-         [{:bucket bucket}]
+         [{:type ::leaf :bucket bucket}]
          (match [(update-fun target-bits depth gap bucket)]
                 [[:single bucket]] ; update done
                 (leaf bucket)
                 [[:split bucket-t bucket-f]] ; have to split first then continue
                 (let [tree (branch (leaf bucket-t) (leaf bucket-f))]
-                  (recur target-bits update-fun self-bits depth gap tree)))
-         [{:child-t child-t :child-f child-f}]
+                  (recur update-fun target-bits self-bits depth gap tree)))
+         [{:type ::branch :child-t child-t :child-f child-f}]
          (let [next-target-bit (first target-bits)
                next-self-bit (first self-bits)
                target-bits (rest target-bits)
@@ -28,12 +28,12 @@
                gap (+ gap
                       (cond
                        (= next-target-bit next-self-bit) 0
-                       (= next-target-bit true) (:size child-t)
-                       (= next-target-bit false) (:size child-f)))
-               child-t (if next-target-bit
-                         (update-internal update-fun target-bits self-bits depth gap child-t)
-                         child-t)
-               child-f (if next-target-bit
+                       (= next-target-bit 1) (:size child-t)
+                       (= next-target-bit 0) (:size child-f)))
+               child-t (if (= next-target-bit 0)
+                         child-t
+                         (update-internal update-fun target-bits self-bits depth gap child-t))
+               child-f (if (= next-target-bit 1)
                          child-f
                          (update-internal update-fun target-bits self-bits depth gap child-f))]
            (branch child-t child-f))))

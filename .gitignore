@@ -3,3 +3,5 @@ build/
 classes/
 lib/
 pom.xml
+.lein-deps-sum
+.lein-failures

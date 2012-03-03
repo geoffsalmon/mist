@@ -1,8 +1,5 @@
-(ns mist.network
-  (:require [aleph [udp :as udp]])
-  (:require [lamina [core :as lamina]])
-  (:require [gloss [core :as gloss] [io :as glossio]])
-  (:require [gloss.data [bytes :as bytes]]))
+(ns mist.msgs.channels
+  (:require [lamina [core :as lamina]]))
 
 (defprotocol MsgChannels
   "A mutable set of uniquely numbered channels. Messages can be
@@ -18,8 +15,8 @@ dispatch to a channel by number"
 
 (defn- listen-to-channel [cm channel num]
   (lamina/receive-all
-   #(lamina/enqueue (:gateway cm) (assoc % :from-channel num))
-   channel))
+   channel
+   #(lamina/enqueue (:gateway cm) (assoc % :from-channel num))))
 
 (defrecord ChannelMultiplexor [gateway channels channel-num-fn]
   MsgChannels
@@ -35,12 +32,15 @@ dispatch to a channel by number"
     (swap! channels #(assoc %
                        (channel-num-fn %) channel))
     ;; need to save the chosen channel above to pass it to listen-to-channel
-    #_(listen-to-channel cm channel))
+    #_(listen-to-channel cm channel chosen-channel))
 
   (remove-channel [cm channel-num]
+    ;; not thread safe! the channel that's closed and returned might
+    ;; not be the one swapped out of the channels map
     (when-let [ch (@channels channel-num)]
       (lamina/close ch)
-      (swap! channels dissoc channel-num)))
+      (swap! channels dissoc channel-num)
+      ch))
 
   (dispatch-msg [cm channel-num msg]
     (when-let [channel (@channels channel-num)]
@@ -48,12 +48,15 @@ dispatch to a channel by number"
        channel
        msg))))
 
-(defn- choose-channel-num [channels]
-  (loop []
-    (let [guess (+ 1000 (rand-int 1000000000))]
-      (if (nil? (get channels guess))
-        guess
-        (recur)))))
+
+(defn random-channel [min-num max-num]
+  (let [spread (- max-num min-num)]
+    (fn [channels]
+      (loop []
+        (let [guess (+ min (rand-int spread))]
+          (if (nil? (get channels guess))
+            guess
+            (recur)))))))
 
 (defn channel-multiplexor
   "Creates and returns a generic channel multiplexor. Any messages
@@ -64,7 +67,7 @@ dispatch to a channel by number"
   multiplexor must be a map and will be enqueued on the
   gateway-channel with the appropriate :from-channel added."
   ([gateway-channel]
-     (channel-multiplexor choose-channel-num))
+     (channel-multiplexor gateway-channel (random-channel 1000 10000)))
   ([gateway-channel channel-num-fn]
       (let [cm (ChannelMultiplexor. gateway-channel (atom {}) channel-num-fn)]
         ;; start receive loop
@@ -72,51 +75,3 @@ dispatch to a channel by number"
          gateway-channel
          #(dispatch-msg cm (:to-channel %) %))
         cm)))
-
-(gloss/defcodec- header-codec
-  (gloss/ordered-map :to-channel :uint32 :from-channel :uint32))
-
-(def ^{:private true} header-len 8)
-
-(defn wrap-udp-gateway
-  ""
-  [gateway-channel]
-  ;; wrap the gateway-channel in both directions to do udp-specific
-  ;; encoding/decoding
-  (let [[gateway-side multiplexor-side] (lamina/channel-pair)]
-
-    ;; siphon incoming udp packets
-    (lamina/siphon
-     (->>
-      gateway-channel
-      ;; filter messages that are too small to have a header
-      (lamina/filter* #(>= (:message %) header-len))
-
-      ;; decode udp messages
-      (lamina/map*
-       #(let [message (:message %)
-              header (glossio/decode
-                      header-codec
-                      (bytes/take-bytes message header-len))]
-          (into
-           (assoc % :message (bytes/drop-bytes message header-len))
-           header))))
-     gateway-side)
-
-    ;; siphon outgoing messages 
-    (lamina/siphon
-     (lamina/map*
-      ;; encode and add the header
-      #(assoc % :message
-              (bytes/concat-bytes
-               (glossio/encode header-codec %)
-               (:message %)))
-      gateway-side)
-     gateway-channel)
-    
-    multiplexor-side))
-
-(defn test-cm []
-  (let [[c1 c2] (lamina/channel-pair)
-        cm (channel-multiplexor c2)]
-    [cm c1]))

@@ -16,29 +16,26 @@ dispatch to a channel by number"
   (remove-channel [cm channel-num] "Remove and return a channel.")
   (dispatch-msg [cm channel-num msg]))
 
-(defn- choose-channel-num [channels]
-  (loop []
-    (let [guess (+ 1000 (rand-int 1000000000))]
-      (if (nil? (get channels guess))
-        guess
-        (recur)))))
+(defn- listen-to-channel [cm channel num]
+  (lamina/receive-all
+   #(lamina/enqueue (:gateway cm) (assoc % :from-channel num))
+   channel))
 
-(defn- listen-to-channel [cm channel]
-  )
-
-(defrecord ChannelMultiplexor [gateway channels]
+(defrecord ChannelMultiplexor [gateway channels channel-num-fn]
   MsgChannels
   (add-channel [cm channel channel-num]
     (swap! channels
            #(if (nil? (get % channel-num))
               (assoc % channel-num channel)
               (throw (Exception. (str "Channel num " channel-num " already used")))))
-    (listen-to-channel cm channel))
+    (listen-to-channel cm channel channel-num))
 
   (add-channel [cm channel]
     ;; add channel to map
-    (swap! channels #(assoc % (choose-channel-num %) channel))
-    (listen-to-channel cm channel))
+    (swap! channels #(assoc %
+                       (channel-num-fn %) channel))
+    ;; need to save the chosen channel above to pass it to listen-to-channel
+    #_(listen-to-channel cm channel))
 
   (remove-channel [cm channel-num]
     (when-let [ch (@channels channel-num)]
@@ -51,6 +48,13 @@ dispatch to a channel by number"
        channel
        msg))))
 
+(defn- choose-channel-num [channels]
+  (loop []
+    (let [guess (+ 1000 (rand-int 1000000000))]
+      (if (nil? (get channels guess))
+        guess
+        (recur)))))
+
 (defn channel-multiplexor
   "Creates and returns a generic channel multiplexor. Any messages
   enqueued on the gateway-channel must be maps with a :to-channel
@@ -59,36 +63,58 @@ dispatch to a channel by number"
   to. Likewise, any message enqueued in a channel that's added to the
   multiplexor must be a map and will be enqueued on the
   gateway-channel with the appropriate :from-channel added."
-  [gateway-channel]
-  (let [cm (ChannelMultiplexor. gateway-channel (atom {}))]
-    ;; start receive loop
-    (lamina/receive-all
-     gateway-channel
-     #(dispatch-msg cm (:to-channel %) %))
-    cm))
+  ([gateway-channel]
+     (channel-multiplexor choose-channel-num))
+  ([gateway-channel channel-num-fn]
+      (let [cm (ChannelMultiplexor. gateway-channel (atom {}) channel-num-fn)]
+        ;; start receive loop
+        (lamina/receive-all
+         gateway-channel
+         #(dispatch-msg cm (:to-channel %) %))
+        cm)))
 
-(gloss/defcodec- header-codec (gloss/ordered-map :to-channel :uint32 :from-channel :uint32))
+(gloss/defcodec- header-codec
+  (gloss/ordered-map :to-channel :uint32 :from-channel :uint32))
 
 (def ^{:private true} header-len 8)
 
-(defn udp-channel-multiplexor
+(defn wrap-udp-gateway
+  ""
   [gateway-channel]
-  
-  (let [cm (ChannelMultiplexor. gateway-channel (atom {}))]
-    ;; start receive loop
-    (lamina/receive-all
-     gateway-channel
-     (fn [msg]
-       (if (>= (bytes/byte-count msg) header-len)
-         (let [{:keys [to-channel from-channel]}
-               ;; decode header
-               (glossio/decode header-codec (bytes/take-bytes msg header-len))]
-           (dispatch-msg cm to-channel
-                         (assoc msg
-                           :message (bytes/drop-bytes msg header-len)
-                           :to-channel to-channel
-                           :from-channel from-channel))))))
-    cm))
+  ;; wrap the gateway-channel in both directions to do udp-specific
+  ;; encoding/decoding
+  (let [[gateway-side multiplexor-side] (lamina/channel-pair)]
+
+    ;; siphon incoming udp packets
+    (lamina/siphon
+     (->>
+      gateway-channel
+      ;; filter messages that are too small to have a header
+      (lamina/filter* #(>= (:message %) header-len))
+
+      ;; decode udp messages
+      (lamina/map*
+       #(let [message (:message %)
+              header (glossio/decode
+                      header-codec
+                      (bytes/take-bytes message header-len))]
+          (into
+           (assoc % :message (bytes/drop-bytes message header-len))
+           header))))
+     gateway-side)
+
+    ;; siphon outgoing messages 
+    (lamina/siphon
+     (lamina/map*
+      ;; encode and add the header
+      #(assoc % :message
+              (bytes/concat-bytes
+               (glossio/encode header-codec %)
+               (:message %)))
+      gateway-side)
+     gateway-channel)
+    
+    multiplexor-side))
 
 (defn test-cm []
   (let [[c1 c2] (lamina/channel-pair)

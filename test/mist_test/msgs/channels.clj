@@ -11,13 +11,13 @@
 
 (defn create-channel [cm & opts]
   (let [[c1 c2] (lamina/channel-pair)]
-    (apply ch/add-channel cm c2 opts)
-    c1))
+    [c1 (apply ch/add-channel cm c2 opts)]
+    ))
 
 (deftest msg-out
   (let [[gw cm] (create-cm)
-        c1 (create-channel cm 0)
-        c2 (create-channel cm 1)]
+        [c1 _] (create-channel cm 0)
+        [c2 _] (create-channel cm 1)]
 
     (is (empty? (lamina/channel-seq c1)))
     (lamina/enqueue c1 {:msg "hi"})
@@ -34,8 +34,8 @@
 
 (deftest msg-in
   (let [[gw cm] (create-cm)
-        c1 (create-channel cm 0)
-        c2 (create-channel cm 1)]
+        [c1 _] (create-channel cm 0)
+        [c2 _] (create-channel cm 1)]
     (is (empty? (lamina/channel-seq c1)))
     (is (empty? (lamina/channel-seq c2)))
 
@@ -65,20 +65,48 @@
 
 (deftest add-remove-channels
   (let [[gw cm] (create-cm)
-        c1 (create-channel cm 0)
+        [c1 _] (create-channel cm 0)
 
         [c2a c2b] (lamina/channel-pair)]
     (ch/add-channel cm c2b 1)
     (is (thrown? Exception (create-channel cm 1)) "channel must have unique nums")
     (is (= c2b (ch/remove-channel cm 1)) "remove returns removed channel")
 
+    (is (nil? (ch/remove-channel cm 10)) "remove non-existent channel")
+
     (is (lamina/closed? c2b) "removed channel is closed")
     
     (lamina/enqueue gw {:msg "red" :to-channel 1})
 
-    (let [c2 (create-channel cm 1)]
+    (let [[c2 _] (create-channel cm 1)]
       (lamina/enqueue gw {:msg "blue" :to-channel 1})
       (is (= (lamina/channel-seq c2)
              [{:msg "blue" :to-channel 1}]) "removed channel can be replaced"))))
+
+(deftest add-remove-random-channels
+  (let [[gw cm] (create-cm)
+        [c1 n1] (create-channel cm)
+        [c2 n2] (create-channel cm)]
+
+    (is (not= n1 n2))
+    (println "n1" n1 "n2" n2)
+    (is (thrown? Exception (create-channel cm n1)) "channel must have unique nums")
+    
+    (lamina/enqueue gw {:msg "red" :to-channel n1})
+    (lamina/enqueue gw {:msg "blue" :to-channel n2})
+
+    (is (= (lamina/channel-seq c1)
+           [{:msg "red" :to-channel n1}]))
+    (is (= (lamina/channel-seq c2)
+           [{:msg "blue" :to-channel n2}]))
+
+    (ch/remove-channel cm n2)
+    (is (= (lamina/channel-seq c2) [nil]))
+    (is (lamina/drained? c2))
+    
+    (lamina/enqueue gw {:msg "red" :to-channel n1})
+    (lamina/enqueue gw {:msg "blue" :to-channel n2})
+    (is (= (lamina/channel-seq c1)
+           [{:msg "red" :to-channel n1}]))))
 
 (deftest channel-nums)

@@ -26,10 +26,9 @@ dispatch to a channel by number"
   MsgChannels
   (add-channel [cm channel channel-num]
     (dosync
-     (alter channels
-            #(if (nil? (get % channel-num))
-               (assoc % channel-num channel)
-               (throw (Exception. (str "Channel num " channel-num " already used"))))))
+     (if (contains? (ensure channels) channel-num)
+       (throw (Exception. (str "Channel num " channel-num " already used")))
+       (alter channels assoc channel-num channel)))
     (listen-to-channel cm channel channel-num))
 
   (add-channel [cm channel]
@@ -38,15 +37,17 @@ dispatch to a channel by number"
        ;; choose a channel
        (ref-set channel-num (channel-num-fn @channels))
        ;; add channel to map
-       (alter channels assoc channel-num channel))
+       (alter channels assoc @channel-num channel))
       (listen-to-channel cm channel @channel-num)))
 
   (remove-channel [cm channel-num]
-    (dosync
-     (when-let [ch (@channels channel-num)]
+    (when-let [ch
+          (dosync
+           (when-let [ch (@channels channel-num)]
+             (alter channels dissoc channel-num)
+             ch))]
       (lamina/close ch)
-      (alter channels dissoc channel-num)
-      ch)))
+      ch))
 
   (dispatch-msg [cm channel-num msg]
     (when-let [channel (@channels channel-num)]
@@ -59,7 +60,7 @@ dispatch to a channel by number"
   (let [spread (- max-num min-num)]
     (fn [channels]
       (loop []
-        (let [guess (+ min (rand-int spread))]
+        (let [guess (+ min-num (rand-int spread))]
           (if (nil? (get channels guess))
             guess
             (recur)))))))

@@ -19,11 +19,22 @@
   ;; encoding/decoding. This could be simplified if we could compile a
   ;; frame that would parse the header and leave the rest of the
   ;; message as byte buffers and pass that to the udp-socket when it's
-  ;; created.
-  (let [[gateway-side multiplexor-side] (lamina/channel-pair)]
-
-    ;; siphon incoming udp packets
+  ;; created. I haven't figured out an appropriate frame yet though.
+  (let [outgoing (lamina/channel)]
+    ;; siphon messages from the new outgoing channel to the udp gateway
     (lamina/siphon
+     (lamina/map*
+      ;; encode and add the header
+      #(assoc % :message
+              ;; Convert byte buffers to channel-buffer
+              (formats/bytes->channel-buffer
+               (bytes/concat-bytes
+                (glossio/encode header-codec %)
+                (:message %))))
+      outgoing)
+     gateway-channel)
+
+    (lamina/splice
      (->>
       gateway-channel
 
@@ -32,7 +43,7 @@
       (lamina/map*
        #(assoc % :message
                (bytes/create-buf-seq (formats/bytes->byte-buffers (:message %)))))
-      
+
       ;; filter messages that are too small to have a header
       (lamina/filter* #(>= (bytes/byte-count (:message %)) header-len))
 
@@ -46,19 +57,4 @@
            ;; replace message with remainder of bytes
            (assoc % :message (bytes/drop-bytes message header-len))
            header))))
-     gateway-side)
-
-    ;; siphon outgoing messages 
-    (lamina/siphon
-     (lamina/map*
-      ;; encode and add the header
-      #(assoc % :message
-              ;; Convert byte buffers to channel-buffer
-              (formats/bytes->channel-buffer
-               (bytes/concat-bytes
-                (glossio/encode header-codec %)
-                (:message %))))
-      gateway-side)
-     gateway-channel)
-    
-    multiplexor-side))
+     outgoing)))

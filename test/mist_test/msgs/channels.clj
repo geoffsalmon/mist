@@ -7,7 +7,7 @@
 
 (defn create-cm [& opts]
   (let [[ext gw] (lamina/channel-pair)]
-    [ext (apply ch/channel-multiplexor gw opts)]))
+    [ext (apply ch/gateway-multiplexor gw opts)]))
 
 (defn create-channel [cm & opts]
   (let [[c1 c2] (lamina/channel-pair)]

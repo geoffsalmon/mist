@@ -16,7 +16,10 @@
   ""
   [gateway-channel]
   ;; wrap the gateway-channel in both directions to do udp-specific
-  ;; encoding/decoding
+  ;; encoding/decoding. This could be simplified if we could compile a
+  ;; frame that would parse the header and leave the rest of the
+  ;; message as byte buffers and pass that to the udp-socket when it's
+  ;; created.
   (let [[gateway-side multiplexor-side] (lamina/channel-pair)]
 
     ;; siphon incoming udp packets
@@ -40,6 +43,7 @@
                       header-codec
                       (bytes/take-bytes message header-len))]
           (into
+           ;; replace message with remainder of bytes
            (assoc % :message (bytes/drop-bytes message header-len))
            header))))
      gateway-side)

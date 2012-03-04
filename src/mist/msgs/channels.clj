@@ -7,40 +7,46 @@ dispatch to a channel by number"
   (add-channel [cm channel] [cm channel channel-num]
     "Adds a new channel internal to the multiplexor. If no channel-num
     is specified, a number will be chosen randomly and returned. If a
-    channel-num is given but already in use then the channel will be
-    replaced and the previous one returned.")
+    channel-num is given but already in use then an Exception is
+    thrown. Returns the new channels number.")
   
   (remove-channel [cm channel-num] "Remove and return a channel.")
-  (dispatch-msg [cm channel-num msg]))
+  
+  (dispatch-msg [cm channel-num msg] "Enqueues a message on the
+  channel corresponding to the given number. Ignores messages sent to
+  non-existent channels."))
 
 (defn- listen-to-channel [cm channel num]
   (lamina/receive-all
    channel
-   #(lamina/enqueue (:gateway cm) (assoc % :from-channel num))))
+   #(lamina/enqueue (:gateway cm) (assoc % :from-channel num)))
+  num)
 
-(defrecord ChannelMultiplexor [gateway channels channel-num-fn]
+(defrecord GatewayChannelMultiplexor [gateway channels channel-num-fn]
   MsgChannels
   (add-channel [cm channel channel-num]
-    (swap! channels
-           #(if (nil? (get % channel-num))
-              (assoc % channel-num channel)
-              (throw (Exception. (str "Channel num " channel-num " already used")))))
+    (dosync
+     (alter channels
+            #(if (nil? (get % channel-num))
+               (assoc % channel-num channel)
+               (throw (Exception. (str "Channel num " channel-num " already used"))))))
     (listen-to-channel cm channel channel-num))
 
   (add-channel [cm channel]
-    ;; add channel to map
-    (swap! channels #(assoc %
-                       (channel-num-fn %) channel))
-    ;; need to save the chosen channel above to pass it to listen-to-channel
-    #_(listen-to-channel cm channel chosen-channel))
+    (let [channel-num (ref nil)]
+      (dosync
+       ;; choose a channel
+       (ref-set channel-num (channel-num-fn @channels))
+       ;; add channel to map
+       (alter channels assoc channel-num channel))
+      (listen-to-channel cm channel @channel-num)))
 
   (remove-channel [cm channel-num]
-    ;; not thread safe! the channel that's closed and returned might
-    ;; not be the one swapped out of the channels map
-    (when-let [ch (@channels channel-num)]
+    (dosync
+     (when-let [ch (@channels channel-num)]
       (lamina/close ch)
-      (swap! channels dissoc channel-num)
-      ch))
+      (alter channels dissoc channel-num)
+      ch)))
 
   (dispatch-msg [cm channel-num msg]
     (when-let [channel (@channels channel-num)]
@@ -58,19 +64,26 @@ dispatch to a channel by number"
             guess
             (recur)))))))
 
-(defn channel-multiplexor
-  "Creates and returns a generic channel multiplexor. Any messages
-  enqueued on the gateway-channel must be maps with a :to-channel
-  key. The value corresponding to the :to-channel key determines which
-  channel in the multiplexor the enqueued message will be sent
-  to. Likewise, any message enqueued in a channel that's added to the
+(defn gateway-multiplexor
+  "Creates and returns a channel multiplexor with a gateway
+  channel.
+
+  Any messages enqueued on the gateway-channel must be maps with
+  a :to-channel key. The value corresponding to the :to-channel key
+  determines which channel in the multiplexor the enqueued message
+  will be sent to. Likewise, any message enqueued in a channel in the
   multiplexor must be a map and will be enqueued on the
-  gateway-channel with the appropriate :from-channel added."
+  gateway-channel with the appropriate :from-channel added.
+
+  The channel-num-fn is used to select a channel number when
+  add-channel is called without a number. It must be a function that
+  takes a single argument, the existing channels map, and returns the
+  channel number. It is called from within a dosync."
   ([gateway-channel]
-     (channel-multiplexor gateway-channel (random-channel 1000 10000)))
+     (gateway-multiplexor gateway-channel (random-channel 1000 10000)))
   ([gateway-channel channel-num-fn]
-      (let [cm (ChannelMultiplexor. gateway-channel (atom {}) channel-num-fn)]
-        ;; start receive loop
+      (let [cm (GatewayChannelMultiplexor. gateway-channel (ref {}) channel-num-fn)]
+        ;; start receiving from gateway
         (lamina/receive-all
          gateway-channel
          #(dispatch-msg cm (:to-channel %) %))

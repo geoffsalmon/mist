@@ -1,5 +1,7 @@
 (ns mist.msgs.udp
   (:require [lamina [core :as lamina]])
+
+  (:require [aleph [formats :as formats]])
   (:require [gloss [core :as gloss] [io :as glossio]])
   (:require [gloss.data [bytes :as bytes]]))
 
@@ -7,6 +9,8 @@
   (gloss/ordered-map :to-channel :uint32 :from-channel :uint32))
 
 (def ^{:private true} header-len 8)
+
+;; wrap aleph.core/wrap-endpoint [ch receive-fn enqueue-fn]
 
 (defn wrap-udp-gateway
   ""
@@ -19,8 +23,19 @@
     (lamina/siphon
      (->>
       gateway-channel
+
+      ;; UDP channels seem to produce a message as a
+      ;; channel-buffer. Convert to byte-buffers.
+      (lamina/map*
+       #(assoc % :message
+
+               (let [m (formats/bytes->byte-buffers (:message %))]
+                 (println "type of" (type (:message %)) (type m))
+                 m
+                 )))
+      
       ;; filter messages that are too small to have a header
-      (lamina/filter* #(>= (:message %) header-len))
+      (lamina/filter* #(>= (bytes/byte-count (:message %)) header-len))
 
       ;; decode udp messages
       (lamina/map*
@@ -38,9 +53,11 @@
      (lamina/map*
       ;; encode and add the header
       #(assoc % :message
-              (bytes/concat-bytes
-               (glossio/encode header-codec %)
-               (:message %)))
+              ;; Convert byte buffers to channel-buffer
+              (formats/bytes->channel-buffer
+               (bytes/concat-bytes
+                (glossio/encode header-codec %)
+                (:message %))))
       gateway-side)
      gateway-channel)
     

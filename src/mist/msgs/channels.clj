@@ -69,8 +69,8 @@ dispatch to a channel by number"
   "Creates and returns a channel multiplexor with a gateway
   channel.
 
-  Any messages enqueued on the gateway-channel must be maps with
-  a :to-channel key. The value corresponding to the :to-channel key
+  Any message enqueued on the gateway-channel must be a map contain
+  the key-value pair (:to-channel channel-num), where channel-num
   determines which channel in the multiplexor the enqueued message
   will be sent to. Likewise, any message enqueued in a channel in the
   multiplexor must be a map and will be enqueued on the

@@ -11,28 +11,28 @@
    [org.jboss.netty.channel ChannelException]))
 
 
-;; is there anyway to let the OS pick the port and discover the port
-;; number it chose?
-(defn- attempt-bind [port]
-  (try
-    (aleph.udp/udp-socket {:port port}) 
-    (catch ChannelException e
-      (println "Unable to bind" port e)
-      nil)))
-
 (def ^{:dynamic true} *skts* nil)
 
 (defn create-skt
   "Create and udp socket and return [channel port]. Tries random ports
   until it can successfully bind one."
-  []
-  (let [port (+ 12000 (rand-int 1000))
-        skt (attempt-bind port)]
-    (if skt
-      (let [skt (lamina/wait-for-result skt)]
-        (swap! *skts* conj skt)
-        [skt port])
-      (recur))))
+  ([] (create-skt {}))
+  ([opts]
+     (loop []
+       (let [port (+ 12000 (rand-int 1000))]
+         (if-let [skt
+                  (try
+                    ;; is there anyway to let the OS pick the port and
+                    ;; discover the port number it chose?
+                    (aleph.udp/udp-socket (assoc opts :port port)) 
+                    (catch ChannelException e
+                      (println "Unable to bind" port e)
+                      nil))]
+           (let [skt (lamina/wait-for-result skt)]
+             ;; save skt so it can be automatically closed
+             (swap! *skts* conj skt)
+             [skt port])
+           (recur))))))
 
 ;; add fixture to close all udp skts
 (defn close-skts [skts]
@@ -53,52 +53,33 @@
 (deftest gateways
   (let [[gw gw-port] (create-skt)
         gw (udp/wrap-udp-gateway gw)
-        [skt skt-port] (create-skt)]
+        codec (gloss/compile-frame
+               (gloss/ordered-map :to-channel :uint32
+                                  :from-channel :uint32
+                                  :val :uint32))
+        [skt skt-port] (create-skt {:frame codec})]
 
-    (prn "bound" gw-port "and" skt-port)
-    #_(lamina/enqueue gw {:host localhost :port skt-port
-                        :to-channel 10 :from-channel 1
-                        :message (formats/bytes->channel-buffer "hello")})
-
+    ;; test skt->gateway
     (lamina/enqueue skt {:host localhost :port gw-port
                          :message
-                         (formats/bytes->channel-buffer
-                          (glossio/encode
-                           (gloss/ordered-map :a :uint32 :b :uint32 :c :uint32)
-                           {:a 1 :b 2 :c 3}))})
+                         {:to-channel 1 :from-channel 2 :val 3}})
 
-    #_(prn (lamina/wait-for-message skt 5000))
-    (prn (lamina/wait-for-message gw 5000))))
+    (let [m (lamina/wait-for-message gw 1000)]
+      (is (= (:host m) localhost))
+      (is (= (:port m) skt-port))
+      (is (= (:to-channel m) 1))
+      (is (= (:from-channel m) 2))
+      (is (= (glossio/decode {:val :uint32} (:message m)) {:val 3})))
 
+    (lamina/enqueue gw {:host localhost :port skt-port
+                        :to-channel 10 :from-channel 11
+                        :message (glossio/encode {:val :uint32} {:val 42})})
 
-(defn test-skt []
-  (let [s1 (lamina/wait-for-result (aleph.udp/udp-socket {:port 10000}))
-        s2 (lamina/wait-for-result (aleph.udp/udp-socket {:port 10001}))]
-    (try
-      (lamina/enqueue
-       s1
-       {:host localhost :port 10001
-        :message
-        (formats/bytes->channel-buffer
-         (glossio/encode
-          (gloss/ordered-map :a :uint32 :b :uint32 :c :uint32)
-          {:a 1 :b 2 :c 3}))
-        #_(formats/bytes->channel-buffer "thello")})
-
-      (let [m (lamina/wait-for-message s2 1000)
-            msg (formats/bytes->byte-buffers (:message m))]
-        (println "received" m "\n" msg))
-
-      (finally
-       (lamina/close s1)
-       (lamina/close s2)))))
-
-(defn test-skt2 []
-  (let [s (lamina/wait-for-result (aleph.udp/udp-socket {:port 10000}))]
-    ;;(lamina/siphon s s)
-    (lamina/receive-all
-     s
-     #(do (prn "Receive" %)
-          (lamina/enqueue s %)))
-    s))
-
+    ;; test gateway->skt
+    (let [m (lamina/wait-for-message skt 1000)
+          msg (:message m)]
+      (is (= (:host m) localhost))
+      (is (= (:port m) gw-port))
+      (is (= (:to-channel msg) 10))
+      (is (= (:from-channel msg) 11))
+      (is (= (:val msg) 42)))))

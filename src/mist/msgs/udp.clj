@@ -25,14 +25,10 @@
       gateway-channel
 
       ;; UDP channels seem to produce a message as a
-      ;; channel-buffer. Convert to byte-buffers.
+      ;; channel-buffer. Convert to buf seq.
       (lamina/map*
        #(assoc % :message
-
-               (let [m (formats/bytes->byte-buffers (:message %))]
-                 (println "type of" (type (:message %)) (type m))
-                 m
-                 )))
+               (bytes/create-buf-seq (formats/bytes->byte-buffers (:message %)))))
       
       ;; filter messages that are too small to have a header
       (lamina/filter* #(>= (bytes/byte-count (:message %)) header-len))

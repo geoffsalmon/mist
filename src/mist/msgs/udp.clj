@@ -13,12 +13,12 @@
 ;; wrap aleph.core/wrap-endpoint [ch receive-fn enqueue-fn]
 
 (defn wrap-udp-gateway
-  ""
+  "Wrap the gateway-channel in both directions to do udp-specific
+  encoding/decoding. The wrapped channel is returned"
   [gateway-channel]
-  ;; wrap the gateway-channel in both directions to do udp-specific
-  ;; encoding/decoding. This could be simplified if we could compile a
-  ;; frame that would parse the header and leave the rest of the
-  ;; message as byte buffers and pass that to the udp-socket when it's
+  ;; If we could compile a frame that would parse the header and leave
+  ;; the rest of the message as byte buffers, then this could be
+  ;; simplified by passing that frame to the udp-socket when it's
   ;; created. I haven't figured out an appropriate frame yet though.
   (let [outgoing (lamina/channel)]
     ;; siphon messages from the new outgoing channel to the udp gateway

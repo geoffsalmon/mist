@@ -9,6 +9,8 @@ dispatch to a channel by number"
     is specified, a number will be chosen randomly and returned. If a
     channel-num is given but already in use then an Exception is
     thrown. Returns the new channels number.")
+
+  (get-channel [cm channel-num] "Return channel")
   
   (remove-channel [cm channel-num] "Remove and return a channel.")
   
@@ -39,6 +41,9 @@ dispatch to a channel by number"
        ;; add channel to map
        (alter channels assoc @channel-num channel))
       (listen-to-channel cm channel @channel-num)))
+
+  (get-channel [cm channel-num]
+    (get @channels channel-num))
 
   (remove-channel [cm channel-num]
     (when-let [ch

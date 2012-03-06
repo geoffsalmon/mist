@@ -69,8 +69,13 @@
 
         [c2a c2b] (lamina/channel-pair)]
     (ch/add-channel cm c2b 1)
+
+    (is (nil? (ch/get-channel cm 2)) "non-existent channel")
+    (is (= c2b (ch/get-channel cm 1)))
+
     (is (thrown? Exception (create-channel cm 1)) "channel must have unique nums")
     (is (= c2b (ch/remove-channel cm 1)) "remove returns removed channel")
+    (is (nil? (ch/get-channel cm 1)) "get after remove")
 
     (is (nil? (ch/remove-channel cm 10)) "remove non-existent channel")
 

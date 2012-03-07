@@ -51,15 +51,22 @@
 (def localhost "127.0.0.1")
 
 (deftest gateways
-  (let [[gw gw-port] (create-skt)
-        gw (udp/wrap-udp-gateway gw)
+  (let [
+        channel-codecs {1 
+                        (gloss/compile-frame {:val :uint32})}
+        [gw gw-port] (create-skt (udp/gateway-options
+                                   (fn [chan]
+                                     (channel-codecs (int chan)))))
+        gw (udp/wrap-gateway-channel gw)
         codec (gloss/compile-frame
                (gloss/ordered-map :to-channel :uint32
                                   :from-channel :uint32
                                   :val :uint32))
         [skt skt-port] (create-skt {:frame codec})]
 
+    
     ;; test skt->gateway
+    ;; send to channel 1 which does have body codec
     (lamina/enqueue skt {:host localhost :port gw-port
                          :message
                          {:to-channel 1 :from-channel 2 :val 3}})
@@ -69,17 +76,46 @@
       (is (= (:port m) skt-port))
       (is (= (:to-channel m) 1))
       (is (= (:from-channel m) 2))
-      (is (= (glossio/decode {:val :uint32} (:message m)) {:val 3})))
+      (is (= (:message m) {:val 3}) "channel 1 has body codec"))
 
+
+    ;; send to channel 20 which doesn't have body codec
+    (lamina/enqueue skt {:host localhost :port gw-port
+                         :message
+                         {:to-channel 20 :from-channel 2 :val 3}})
+
+    (let [m (lamina/wait-for-message gw 1000)]
+      (is (= (:host m) localhost))
+      (is (= (:port m) skt-port))
+      (is (= (:to-channel m) 20))
+      (is (= (:from-channel m) 2))
+      (is (= (glossio/decode {:val :uint32} (:message m)) {:val 3})
+          "channel 2 does not have body codec"))
+
+    ;; test gateway->skt
+    
+    ;; send from channel 11 which doesn't have body codec
     (lamina/enqueue gw {:host localhost :port skt-port
                         :to-channel 10 :from-channel 11
                         :message (glossio/encode {:val :uint32} {:val 42})})
 
-    ;; test gateway->skt
     (let [m (lamina/wait-for-message skt 1000)
           msg (:message m)]
       (is (= (:host m) localhost))
       (is (= (:port m) gw-port))
       (is (= (:to-channel msg) 10))
       (is (= (:from-channel msg) 11))
-      (is (= (:val msg) 42)))))
+      (is (= (:val msg) 42)))
+
+
+    ;; send from channel 1 which does have channel codec
+    (lamina/enqueue gw {:host localhost :port skt-port
+                        :to-channel 10 :from-channel 1
+                        :message {:val 18}})
+    (let [m (lamina/wait-for-message skt 1000)
+          msg (:message m)]
+      (is (= (:host m) localhost))
+      (is (= (:port m) gw-port))
+      (is (= (:to-channel msg) 10))
+      (is (= (:from-channel msg) 1))
+      (is (= (:val msg) 18)))))

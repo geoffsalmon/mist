@@ -52,8 +52,7 @@
 
 (deftest gateways
   (let [
-        channel-codecs {1 
-                        (gloss/compile-frame {:val :uint32})}
+        channel-codecs {1 (udp/attach-codec [] (gloss/compile-frame {:val :uint32}))}
         [gw gw-port] (create-skt (udp/gateway-options
                                    (fn [chan]
                                      (channel-codecs (int chan)))))

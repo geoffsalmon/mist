@@ -15,9 +15,6 @@
 
 (def ^{:private true} header-len 8)
 
-(defn attach-codec [channel codec]
-  (vary-meta channel assoc ::codec codec))
-
 (defn udp-socket [opts]
   (try
     ;; is there anyway to let the OS pick the port and
@@ -34,8 +31,6 @@
         (let [msg (assoc msg :message {:message (:message msg)
                                        :to-channel (:to-channel msg)
                                        :from-channel (:from-channel msg)})]
-
-          (println "sending msg" msg)
           msg))
       ch)
      gateway)
@@ -43,48 +38,54 @@
     (lamina/splice
      (lamina/map*
       (fn [msg]
-        (println "receiving msg" msg)
         (into msg (:message msg)))
       gateway)
      ch)))
 
-;; TODO: refactor this so that encoders and decoders are created once
-;; for each channel registered and then reused, not created for every
-;; message.
+(defn- channel-encoder [body-codec]
+  (let [writer (reify
+                 protocols/Writer
+                 (sizeof [_]
+                   (protocols/sizeof body-codec))
+                 (write-bytes [_ buf v]
+                   (protocols/write-bytes body-codec buf (:message v))))]
+    (fn [header-val]
+      writer)))
 
-(defn- gateway-codec [channel-codec-fn]
+(defn- channel-decoder [body-codec]
+  ;; TODO: Is calling compose-callback for every incoming mesasge
+  ;; slow? Is there a better way? It seems to be required when using
+  ;; gloss/header because the value of the header, the to-channel and
+  ;; from-channel, needs to be added to the decoded
+  ;; message. So.. maybe don't use the header codec when receiving
+  ;; packets. Or maybe memoize this fn?
+  (fn [header-val]
+    (protocols/compose-callback
+     body-codec
+     (fn [body-val b]
+       [true (assoc header-val :message body-val) b]))))
+
+(def ^{:private true} generic-encoder (channel-encoder codecs/identity-codec))
+(def ^{:private true} generic-decoder (channel-decoder codecs/identity-codec))
+
+(defn- gateway-codec [generic-codec channel-codec-fn]
   (gloss/header
    header-codec
    (fn [header-val]
-     (println "header->codec" header-val)
      ;; get body codec from channel metadata
-     (let [body-codec
-           (or
-            (channel-codec-fn header-val)
-            ;; if no set channel codec, pass bytes through unchanged
-            codecs/identity-codec)]
-       (println "returning " body-codec (channel-codec-fn header-val))
-       
-       (let [read-codec (protocols/compose-callback
-                         body-codec
-                         (fn [body-val b]
-                           (println "compose-callback" body-val)
-                           [true (assoc header-val :message body-val) b]))]
-         (reify
-           protocols/Reader
-           (read-bytes [_ b]
-             (protocols/read-bytes read-codec b))
-           protocols/Writer
-           (sizeof [_]
-             (protocols/sizeof body-codec))
-           (write-bytes [_ buf v]
-             (println "write-bytes" v)
-             (protocols/write-bytes body-codec buf (:message v)))))))
+     ((or (channel-codec-fn header-val) generic-codec) header-val))
+   identity))
 
-   (fn [x] (println "body->header" x) x)))
+(defn attach-codec
+  "Attach a codec to a channel and returns the new channel. Adds to
+  the channels metadata."
+  [channel codec]
+  (-> channel
+      (vary-meta assoc ::encoder (channel-encoder codec))
+      (vary-meta assoc ::decoder (channel-decoder codec))))
 
 (defn gateway-options
   ([] (gateway-codec (constantly nil)))
-  ([channel-codec-fn]
-     {:encoder (gateway-codec #(channel-codec-fn (:from-channel %)))
-      :decoder (gateway-codec #(channel-codec-fn (:to-channel %)))}))
+  ([get-channel]
+     {:encoder (gateway-codec generic-encoder #(::encoder (meta (get-channel (:from-channel %)))))
+      :decoder (gateway-codec generic-decoder #(::decoder (meta (get-channel (:to-channel %)))))}))

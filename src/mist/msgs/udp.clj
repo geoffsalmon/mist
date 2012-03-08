@@ -1,10 +1,12 @@
 (ns mist.msgs.udp
   (:require
+   [mist.msgs
+    [channels :as channels]]
    [lamina [core :as lamina]]
    [aleph.udp]
-   [aleph [formats :as formats]]
-   [gloss [core :as gloss] [io :as glossio]]
-   [gloss.data [bytes :as bytes]]
+;;   [aleph [formats :as formats]]
+   [gloss [core :as gloss] #_[io :as glossio]]
+;;   [gloss.data [bytes :as bytes]]
    [gloss.core [codecs :as codecs] [protocols :as protocols]])
 
   (:import

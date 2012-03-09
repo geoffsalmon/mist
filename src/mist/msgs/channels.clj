@@ -24,16 +24,17 @@
 (defrecord ChannelSet [channels channel-num-fn]
   MsgChannels
   (add-channel [cm channel channel-num]
-    (dosync
-     (if (contains? (ensure channels) channel-num)
-       (throw (Exception. (str "Channel num " channel-num " already used")))
-       (alter channels assoc channel-num channel)))
-    channel-num)
+    (let [channel-num (long channel-num)]
+      (dosync
+       (if (contains? (ensure channels) channel-num)
+         (throw (Exception. (str "Channel num " channel-num " already used")))
+         (alter channels assoc channel-num channel)))
+      channel-num))
 
   (add-channel [cm channel]
     (dosync
      ;; choose a channel
-     (let [channel-num (channel-num-fn @channels)]
+     (let [channel-num (long (channel-num-fn @channels))]
        (if (contains? @channels channel-num)
          (throw (Exception. (str "Channel num " channel-num " already used")))
          ;; add channel to map
@@ -41,18 +42,19 @@
        channel-num)))
 
   (get-channel [cm channel-num]
-    (get @channels channel-num))
+    (get @channels (long channel-num)))
 
   (remove-channel [cm channel-num]
     (when-let [ch (dosync
-                   (when-let [ch (@channels channel-num)]
-                     (alter channels dissoc channel-num)
-                     ch))]
+                   (let [channel-num (long channel-num)]
+                     (when-let [ch (@channels channel-num)]
+                       (alter channels dissoc channel-num)
+                       ch)))]
       (lamina/close ch)
       ch))
 
   (dispatch-msg [cm channel-num msg]
-    (when-let [channel (@channels channel-num)]
+    (when-let [channel (get-channel cm channel-num)]
       (lamina/enqueue
        channel
        msg)))

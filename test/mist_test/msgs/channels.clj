@@ -5,17 +5,28 @@
 
 (def timeout 1000)
 
-(defn create-cm [& opts]
-  (let [[ext gw] (lamina/channel-pair)]
-    [ext (apply ch/gateway-multiplexor gw opts)]))
+(defn create-gw-cm [& opts]
+  (let [chan-set (apply ch/channel-set opts)
+        [ext gw] (lamina/channel-pair)]
+    [ext (ch/gateway-multiplexor gw chan-set)]))
 
 (defn create-channel [cm & opts]
   (let [[c1 c2] (lamina/channel-pair)]
     [c1 (apply ch/add-channel cm c2 opts)]
     ))
 
+(deftest dispatch
+  (let [cm (ch/channel-set)
+        [c0 _] (create-channel cm 0)
+        [c1 _] (create-channel cm 1)]
+    (ch/dispatch-msg cm 0 41)
+    (ch/dispatch-msg cm 2 42)
+
+    (is (= (lamina/channel-seq c0) [41]))
+    (is (empty? (lamina/channel-seq c1)))))
+
 (deftest msg-out
-  (let [[gw cm] (create-cm)
+  (let [[gw cm] (create-gw-cm)
         [c1 _] (create-channel cm 0)
         [c2 _] (create-channel cm 1)]
 
@@ -33,7 +44,7 @@
             {:msg "blue" :from-channel 0}]))))
 
 (deftest msg-in
-  (let [[gw cm] (create-cm)
+  (let [[gw cm] (create-gw-cm)
         [c1 _] (create-channel cm 0)
         [c2 _] (create-channel cm 1)]
     (is (empty? (lamina/channel-seq c1)))
@@ -64,7 +75,7 @@
            [{:msg "green" :to-channel 1}]))))
 
 (deftest add-remove-channels
-  (let [[gw cm] (create-cm)
+  (let [[gw cm] (create-gw-cm)
         [c1 _] (create-channel cm 0)
 
         [c2a c2b] (lamina/channel-pair)]
@@ -89,12 +100,11 @@
              [{:msg "blue" :to-channel 1}]) "removed channel can be replaced"))))
 
 (deftest add-remove-random-channels
-  (let [[gw cm] (create-cm)
+  (let [[gw cm] (create-gw-cm)
         [c1 n1] (create-channel cm)
         [c2 n2] (create-channel cm)]
 
     (is (not= n1 n2))
-    (println "n1" n1 "n2" n2)
     (is (thrown? Exception (create-channel cm n1)) "channel must have unique nums")
     
     (lamina/enqueue gw {:msg "red" :to-channel n1})
@@ -115,3 +125,21 @@
            [{:msg "red" :to-channel n1}]))))
 
 (deftest channel-nums)
+
+(deftest close
+  (let [[gw cm] (create-gw-cm)
+        [c1 _] (create-channel cm 0)
+        [c2 _] (create-channel cm 1)]
+
+    (is (empty? (lamina/channel-seq gw)))
+    (is (empty? (lamina/channel-seq c1)))
+    (is (empty? (lamina/channel-seq c2)))
+
+    (ch/close-channels cm)
+    (is (= (lamina/channel-seq gw) [nil]))
+    (is (= (lamina/channel-seq c1) [nil]))
+    (is (= (lamina/channel-seq c2) [nil]))
+
+    (is (lamina/drained? gw))
+    (is (lamina/drained? c1))
+    (is (lamina/drained? c2))))

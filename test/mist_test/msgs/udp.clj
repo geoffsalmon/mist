@@ -50,9 +50,20 @@
 
 (def localhost "127.0.0.1")
 
+(deftest close-gateway
+  (let [[gw gw-port] (create-skt (udp/gateway-options))
+        wrapped-gw (udp/wrap-gateway-channel gw)]
+
+    (is (not (lamina/closed? gw)))
+    (lamina/close wrapped-gw)
+    (is (lamina/closed? gw) "Closing wrapped channel closed underlying udp channel")
+
+    (is (empty? (lamina/channel-seq wrapped-gw)))
+    (is (lamina/drained? wrapped-gw))
+    ))
+
 (deftest gateways
-  (let [
-        channel-codecs {1 (udp/attach-codec [] (gloss/compile-frame {:val :uint32}))}
+  (let [channel-codecs {1 (udp/attach-codec [] (gloss/compile-frame {:val :uint32}))}
         [gw gw-port] (create-skt (udp/gateway-options
                                    (fn [chan]
                                      (channel-codecs (int chan)))))

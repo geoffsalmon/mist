@@ -26,16 +26,21 @@
       nil)))
 
 (defn wrap-gateway-channel [gateway]
-  (let [ch (lamina/channel)]
+  (let [ch (lamina/channel)
+        ch->gw (lamina/map*
+                (fn [msg]
+                  (let [msg (assoc msg :message {:message (:message msg)
+                                                 :to-channel (:to-channel msg)
+                                                 :from-channel (:from-channel msg)})]
+                    msg))
+                ch)]
+    
     (lamina/siphon
-     (lamina/map*
-      (fn [msg]
-        (let [msg (assoc msg :message {:message (:message msg)
-                                       :to-channel (:to-channel msg)
-                                       :from-channel (:from-channel msg)})]
-          msg))
-      ch)
+     ch->gw
      gateway)
+
+    ;; ensure gateway channel is closed when wrapping channel is
+    (lamina/on-drained ch->gw #(lamina/close gateway))
 
     (lamina/splice
      (lamina/map*
@@ -87,7 +92,7 @@
       (vary-meta assoc ::decoder (channel-decoder codec))))
 
 (defn gateway-options
-  ([] (gateway-codec (constantly nil)))
+  ([] (gateway-options (constantly nil)))
   ([get-channel]
      {:encoder (gateway-codec generic-encoder #(::encoder (meta (get-channel (:from-channel %)))))
       :decoder (gateway-codec generic-decoder #(::decoder (meta (get-channel (:to-channel %)))))}))

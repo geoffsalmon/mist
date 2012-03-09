@@ -87,9 +87,10 @@
   "Attach a codec to a channel and returns the new channel. Adds to
   the channels metadata."
   [channel codec]
-  (-> channel
-      (vary-meta assoc ::encoder (channel-encoder codec))
-      (vary-meta assoc ::decoder (channel-decoder codec))))
+  (let [codec (gloss/compile-frame codec)]
+    (-> channel
+        (vary-meta assoc ::encoder (channel-encoder codec))
+        (vary-meta assoc ::decoder (channel-decoder codec)))))
 
 (defn gateway-options
   ([] (gateway-options (constantly nil)))

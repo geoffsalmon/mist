@@ -42,7 +42,8 @@
        channel-num)))
 
   (get-channel [cm channel-num]
-    (get @channels (long channel-num)))
+    (when channel-num
+      (get @channels (long channel-num))))
 
   (remove-channel [cm channel-num]
     (when-let [ch (dosync
